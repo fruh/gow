@@ -248,9 +248,9 @@ func jobInfoMsg(job *Job) string {
 			msg = "[!] Job failed"
 		}
 	} else if job.state == JOB_CACHED {
-		msg = "[ ] Job skipped"
+		msg = "[-] Job skipped"
 	} else {
-		msg = "[!] Job not started"
+		msg = "[*] Job not started"
 	}
 
 	return msg
