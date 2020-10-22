@@ -208,8 +208,6 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 	for {
 		select {
 		case newJob := <-jobWorkerCh:
-			log.Println("[ ] Job started:", newJob.name, w.ID)
-
 			if ctx.force == true {
 				newJob.force = true
 			}
@@ -217,6 +215,8 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 			if newJob.force == false && jobCached(ctx, newJob) {
 				newJob.state = JOB_CACHED
 			} else {
+				log.Println("[ ] Job started:", newJob.name, w.ID)
+				
 				newJob.started = time.Now()
 
 				cmd := exec.Command("bash", "-c", newJob.cmd)
