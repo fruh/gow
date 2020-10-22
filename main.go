@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var Version = "dev"
+var Version = "v0.0.1"
 
 type Job struct {
 	name    string
