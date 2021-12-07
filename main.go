@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-var Version = "v0.0.1"
+var Version = "v0.0.2"
 
 type Job struct {
 	name    string
@@ -216,10 +216,11 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 				newJob.state = JOB_CACHED
 			} else {
 				log.Println("[ ] Job started:", newJob.name, w.ID)
-				
+
 				newJob.started = time.Now()
 
 				cmd := exec.Command("bash", "-c", newJob.cmd)
+				cmd.Dir = ctx.outDir
 				out, err := cmd.CombinedOutput()
 
 				newJob.err = err
@@ -599,7 +600,9 @@ func main() {
 	appendJobQeueSafe(&jobQeue, &initJob)
 
 	wgInit.Wait()
-	log.Println("[ ] Init done\n")
+	log.Println("[ ] Work dir: ", ctx.workDir)
+	log.Println("[ ] Output dir: ", ctx.outDir)
+	log.Println("[ ] Init done")
 
 	jobSchedCh <- true
 
