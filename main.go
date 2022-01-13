@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"math/rand"
 	"os"
 	"os/exec"
+	"os/user"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -19,7 +21,7 @@ import (
 	"time"
 )
 
-var Version = "v0.0.2"
+var Version = "v0.0.3"
 
 type Job struct {
 	name    string
@@ -426,6 +428,23 @@ func parseJob(jobStr string) Job {
 func readJobFile(filePath string) []string {
 	jobs := []string{}
 
+	if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) {
+		user, err := user.Current()
+
+		if err != nil {
+			log.Fatalf("error getting user home: %s", err.Error())
+		}
+		homeDirectory := user.HomeDir
+
+		filePath = filepath.Join(homeDirectory, "gow", "jobs", filePath+".gow")
+	} else {
+		log.Fatal("error loading jobs file: ", err)
+	}
+
+	if _, err := os.Stat(filePath); err != nil {
+		log.Fatal("error loading jobs file: ", err)
+	}
+
 	f, e := os.Open(filePath)
 
 	if e != nil {
@@ -496,7 +515,7 @@ Example:
 
 func main() {
 	coreWorkersF := flag.Int("t", 5, "number of worker threads")
-	workDirF := flag.String("w", "workdir", "workspace directory for outputs, logs and results")
+	workDirF := flag.String("w", "", "workspace directory for outputs, logs and results")
 	inputFileF := flag.String("if", "", "input file to be processed, inputs are processed line by line")
 	inputF := flag.String("i", "", "single input like url, domain, etc.")
 	outFileF := flag.String("of", "", "output directory or file if needed for job processing")
@@ -516,6 +535,17 @@ func main() {
 	}
 
 	log.Println("[ ] Start Version:", Version)
+
+	if *workDirF == "" {
+		user, err := user.Current()
+
+		if err != nil {
+			log.Fatalf("error getting user home: %s", err.Error())
+		}
+		homeDirectory := user.HomeDir
+
+		*workDirF = filepath.Join(homeDirectory, "gow", "workdir")
+	}
 
 	workDirAbs, _ := filepath.Abs(*workDirF)
 	inputFileAbs, _ := filepath.Abs(*inputFileF)
@@ -600,8 +630,9 @@ func main() {
 	appendJobQeueSafe(&jobQeue, &initJob)
 
 	wgInit.Wait()
-	log.Println("[ ] Work dir: ", ctx.workDir)
-	log.Println("[ ] Output dir: ", ctx.outDir)
+	log.Println("[ ]   Working directory: ", ctx.workDir)
+	log.Println("[ ]    Output directory: ", ctx.outDir)
+	log.Println("[ ] Log files directory: ", ctx.logDir)
 	log.Println("[ ] Init done")
 
 	jobSchedCh <- true
