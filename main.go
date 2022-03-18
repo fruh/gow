@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-var Version = "v0.0.3"
+var Version = "v0.0.4"
 
 type Job struct {
 	name    string
@@ -437,9 +437,7 @@ func readJobFile(filePath string) []string {
 		homeDirectory := user.HomeDir
 
 		filePath = filepath.Join(homeDirectory, "gow", "jobs", filePath+".gow")
-	} else {
-		log.Fatal("error loading jobs file: ", err)
-	}
+	} 
 
 	if _, err := os.Stat(filePath); err != nil {
 		log.Fatal("error loading jobs file: ", err)
