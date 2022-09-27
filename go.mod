@@ -1,4 +1,4 @@
-module fruh/gow
+module github.com/fruh/gow
 
 go 1.19
 
