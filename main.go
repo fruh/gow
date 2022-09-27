@@ -19,9 +19,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/fatih/color"
 )
 
-var Version = "v0.0.4"
+var Version = "v0.0.5"
 
 type Job struct {
 	name    string
@@ -246,14 +247,14 @@ func jobInfoMsg(job *Job) string {
 
 	if job.state == JOB_DONE {
 		if job.err == nil {
-			msg = "[+] Job success"
+			msg = color.GreenString("[+] Job success")
 		} else {
-			msg = "[!] Job failed"
+			msg = color.RedString("[!] Job failed")
 		}
 	} else if job.state == JOB_CACHED {
-		msg = "[-] Job skipped"
+		msg = color.YellowString("[-] Job skipped")
 	} else {
-		msg = "[*] Job not started"
+		msg = color.CyanString("[*] Job not started")
 	}
 
 	return msg
@@ -350,8 +351,8 @@ func jobScheduler(jobSchedCh <-chan bool, jobWorkerCh chan<- *Job, sc *Scheduler
 		if jobQeue.jobsRemaining <= 0 {
 			fmt.Println("")
 			log.Println("[#] Total jobs remaining:", jobQeue.jobsRemaining)
-			log.Println("[#] Total jobs loaded:", jobQeue.totalJobs)
-			log.Println("[#] Total jobs failed:", jobQeue.jobsFailed)
+			log.Println(color.GreenString("[#] Total jobs loaded:"), jobQeue.totalJobs)
+			log.Println(color.RedString("[#] Total jobs failed:"), jobQeue.jobsFailed)
 			fmt.Println("")
 
 			jobQeue.mux.Unlock()
