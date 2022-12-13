@@ -19,10 +19,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/fatih/color"
 )
 
-var Version = "v0.0.5"
+var Version = "v0.2.0"
 
 type Job struct {
 	name    string
@@ -130,7 +131,8 @@ func cacheJob(ctx *Context, job *Job, out []byte) {
 	jobFile := filepath.Join(ctx.logDir, job.uniqID)
 
 	if job.err != nil {
-		jobFile = jobFile + ".err"
+		dir_path, filename := filepath.Split(jobFile)
+		jobFile = filepath.Join(dir_path, "_ERROR_"+filename)
 	}
 	f, err := os.Create(jobFile)
 
@@ -218,7 +220,7 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 			if newJob.force == false && jobCached(ctx, newJob) {
 				newJob.state = JOB_CACHED
 			} else {
-				log.Println("[ ] Job started:", newJob.name, w.ID)
+				log.Println(color.CyanString("[ ] Job started:"), newJob.name, w.ID)
 
 				newJob.started = time.Now()
 
@@ -254,7 +256,7 @@ func jobInfoMsg(job *Job) string {
 	} else if job.state == JOB_CACHED {
 		msg = color.YellowString("[-] Job skipped")
 	} else {
-		msg = color.CyanString("[*] Job not started")
+		msg = color.MagentaString("[*] Job not started")
 	}
 
 	return msg
@@ -273,7 +275,12 @@ func jobCollector(jobColCh <-chan *Job, jobSchedCh chan<- bool, c *Collector, sc
 		case jobDone := <-jobColCh:
 			msg := jobInfoMsg(jobDone)
 
-			log.Printf("%s: %s %s err: %v\n", msg, jobDone.name, c.ID, jobDone.err)
+			logMsg := fmt.Sprintf("%s: %s %s", msg, jobDone.name, c.ID)
+
+			if jobDone.err != nil {
+				logMsg = fmt.Sprintf("%s err: %v", logMsg, jobDone.err)
+			}
+			log.Printf("%s\n", logMsg)
 
 			decJobsRemain(jobQeue)
 
@@ -437,8 +444,14 @@ func readJobFile(filePath string) []string {
 		}
 		homeDirectory := user.HomeDir
 
-		filePath = filepath.Join(homeDirectory, "gow", "jobs", filePath+".gow")
-	} 
+		jobsDir := os.Getenv("GOW_JOBS_DIR")
+
+		if jobsDir == "" {
+			jobsDir = filepath.Join(homeDirectory, "gow", "jobs")
+		}
+
+		filePath = filepath.Join(jobsDir, filePath+".gow")
+	}
 
 	if _, err := os.Stat(filePath); err != nil {
 		log.Fatal("error loading jobs file: ", err)
@@ -474,7 +487,7 @@ func createDirs(ctx *Context) {
 }
 
 func jobsHelp() {
-	fmt.Println(`Rules:
+	fmt.Printf(`Rules:
   - jobs at same level will run parallel
   - child jobs starts only after parrent jobs
 
@@ -514,13 +527,13 @@ Example:
 
 func main() {
 	coreWorkersF := flag.Int("t", 5, "number of worker threads")
-	workDirF := flag.String("w", "", "workspace directory for outputs, logs and results")
+	workDirF := flag.String("w", "", "workspace directory for outputs, logs and results default value is GOW_WORK_DIR=~/workdir/gow")
 	inputFileF := flag.String("if", "", "input file to be processed, inputs are processed line by line")
 	inputF := flag.String("i", "", "single input like url, domain, etc.")
 	outFileF := flag.String("of", "", "output directory or file if needed for job processing")
 	proxyF := flag.String("proxy", "", "network proxy like proto://host:port")
 	replayProxyF := flag.String("replay-proxy", "", "replay proxy like proto://host:port, in case of success/finding request is sent to replay proxy e.g. Burp")
-	jobsFileF := flag.String("jobs", "", "execute custom jobs file, overwrites -c")
+	jobsFileF := flag.String("jobs", "", "execute custom jobs file, specify file path or jobs file name without gow suffix, it will be taken from GOW_JOBS_DIR=~/gow/jobs")
 	forceF := flag.Bool("force", false, "force job execution regardless it was run before")
 	jobsExF := flag.Bool("jobs-help", false, "show gow jobs example")
 	cmdOptionsF := flag.String("cmd-options", "", "put addiotnal cmd option to env variable GOW_CMD_OPTIONS")
@@ -536,6 +549,10 @@ func main() {
 	log.Println("[ ] Start Version:", Version)
 
 	if *workDirF == "" {
+		*workDirF = os.Getenv("GOW_WORK_DIR")
+	}
+
+	if *workDirF == "" {
 		user, err := user.Current()
 
 		if err != nil {
@@ -543,7 +560,7 @@ func main() {
 		}
 		homeDirectory := user.HomeDir
 
-		*workDirF = filepath.Join(homeDirectory, "gow", "workdir")
+		*workDirF = filepath.Join(homeDirectory, "workdir", "gow")
 	}
 
 	workDirAbs, _ := filepath.Abs(*workDirF)
@@ -563,7 +580,6 @@ func main() {
 	} else {
 		os.Exit(2)
 	}
-
 	os.Setenv("GOW_WORK_DIR", ctx.workDir)
 	os.Setenv("GOW_OUT_DIR", ctx.outDir)
 	os.Setenv("GOW_IN_DIR", ctx.inDir)
