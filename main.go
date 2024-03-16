@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"os/exec"
 	"os/user"
@@ -87,14 +86,14 @@ const (
 	JOB_CACHED
 )
 
-func dummyJob(job *Job) {
-	i, _ := strconv.Atoi(job.cmd)
+// func dummyJob(job *Job) {
+// 	i, _ := strconv.Atoi(job.cmd)
 
-	time.Sleep(time.Duration(rand.Intn(i)) * time.Millisecond)
-}
+// 	time.Sleep(time.Duration(rand.Intn(i)) * time.Millisecond)
+// }
 
 func fileSafeString(str string) string {
-	r, _ := regexp.Compile("[^A-Za-z0-9\\-]+")
+	r, _ := regexp.Compile(`[^A-Za-z0-9\-]+`)
 
 	safeStr := r.ReplaceAllString(str, "-")
 
@@ -121,10 +120,7 @@ func jobCached(ctx *Context, job *Job) bool {
 
 	_, err := os.Stat(jobFile)
 
-	if os.IsNotExist(err) {
-		return false
-	}
-	return true
+	return !os.IsNotExist(err)
 }
 
 func cacheJob(ctx *Context, job *Job, out []byte) {
@@ -213,11 +209,11 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 	for {
 		select {
 		case newJob := <-jobWorkerCh:
-			if ctx.force == true {
+			if ctx.force {
 				newJob.force = true
 			}
 
-			if newJob.force == false && jobCached(ctx, newJob) {
+			if !newJob.force && jobCached(ctx, newJob) {
 				newJob.state = JOB_CACHED
 			} else {
 				log.Println(color.CyanString("[ ] Job started:"), newJob.name, w.ID)
@@ -296,7 +292,7 @@ func jobCollector(jobColCh <-chan *Job, jobSchedCh chan<- bool, c *Collector, sc
 			}
 			sc.sleepMux.Lock()
 
-			if sc.sleep == true {
+			if sc.sleep {
 				sc.sleep = false
 
 				sc.sleepMux.Unlock()
@@ -371,7 +367,7 @@ func jobScheduler(jobSchedCh <-chan bool, jobWorkerCh chan<- *Job, sc *Scheduler
 }
 
 func createJobTree(job *Job, allJobs []string, index *int, level int) {
-	r, _ := regexp.Compile("^\\s*\\+.*")
+	r, _ := regexp.Compile(`^\s*\+.*`)
 
 	for *index < len(allJobs) {
 		newJobStr := allJobs[*index]
@@ -540,7 +536,7 @@ func main() {
 
 	flag.Parse()
 
-	if *jobsExF == true {
+	if *jobsExF {
 		jobsHelp()
 
 		os.Exit(0)
