@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,7 +20,7 @@ import (
 	"github.com/fatih/color"
 )
 
-var Version = "v0.2.0"
+var Version = "v0.3.4_20250403"
 
 type Job struct {
 	name    string
@@ -76,6 +74,7 @@ type Context struct {
 	logDir        string
 	inDir         string
 	force         bool
+	config        []string
 }
 
 type JobState int
@@ -101,22 +100,60 @@ func fileSafeString(str string) string {
 }
 
 func jobUniqID(job *Job) string {
-	h := sha256.New()
+	// h := sha256.New()
 
-	h.Write([]byte(job.name))
-	h.Write([]byte(job.cmd))
-	h.Write([]byte(strconv.Itoa(job.level)))
+	// h.Write([]byte(job.name))
+	// h.Write([]byte(job.cmd))
+	// h.Write([]byte(strconv.Itoa(job.level)))
 
-	sha256sum := h.Sum(nil)
-	hex256sum := hex.EncodeToString(sha256sum)
+	// sha256sum := h.Sum(nil)
+	// hex256sum := hex.EncodeToString(sha256sum)
 
 	safeName := fileSafeString(job.name)
 
-	return filepath.Clean(safeName + "-" + hex256sum[0:7])
+	// return filepath.Clean(safeName + "_" + hex256sum[0:7])
+	return filepath.Clean(safeName + "_" + strconv.Itoa(job.level))
+}
+
+func jobFileName(ctx *Context, job *Job) string {
+	return filepath.Join(ctx.logDir, job.uniqID+".yaml")
+}
+
+func jobDirName(ctx *Context, job *Job) string {
+	return filepath.Join(ctx.logDir, job.uniqID)
+}
+
+func removeJobDir(ctx *Context, job *Job) error {
+	jobDir := jobDirName(ctx, job)
+
+	// Check if directory exists
+	if _, err := os.Stat(jobDir); os.IsNotExist(err) {
+		// Directory doesn't exist, nothing to do
+		return nil
+	}
+
+	// Remove directory and all contents
+	return os.RemoveAll(jobDir)
+}
+
+func jobSuccessFile(ctx *Context, job *Job) string {
+	return filepath.Join(jobDirName(ctx, job), "success")
+}
+
+func jobErrorFile(ctx *Context, job *Job) string {
+	return filepath.Join(jobDirName(ctx, job), "error")
+}
+
+func jobLogFile(ctx *Context, job *Job) string {
+	return filepath.Join(jobDirName(ctx, job), "log.yaml")
+}
+
+func jobOutputFile(ctx *Context, job *Job) string {
+	return filepath.Join(jobDirName(ctx, job), "output")
 }
 
 func jobCached(ctx *Context, job *Job) bool {
-	jobFile := filepath.Join(ctx.logDir, job.uniqID)
+	jobFile := jobSuccessFile(ctx, job)
 
 	_, err := os.Stat(jobFile)
 
@@ -124,33 +161,53 @@ func jobCached(ctx *Context, job *Job) bool {
 }
 
 func cacheJob(ctx *Context, job *Job, out []byte) {
-	jobFile := filepath.Join(ctx.logDir, job.uniqID)
+	jobDir := jobDirName(ctx, job)
+
+	err := os.MkdirAll(jobDir, 0700)
+
+	if err != nil {
+		panic(err)
+	}
+	jobStatusFile := jobSuccessFile(ctx, job)
 
 	if job.err != nil {
-		dir_path, filename := filepath.Split(jobFile)
-		jobFile = filepath.Join(dir_path, "_ERROR_"+filename)
+		jobStatusFile = jobErrorFile(ctx, job)
 	}
-	f, err := os.Create(jobFile)
+	f, err := os.Create(jobStatusFile)
 
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
-	f.WriteString("name: " + job.name + "\n")
-	f.WriteString("cmd: " + job.cmd + "\n")
-	f.WriteString("level: " + strconv.Itoa(job.level) + "\n")
-	f.WriteString("started at: " + job.started.String() + "\n")
-	f.WriteString("stopped at: " + job.stopped.String() + "\n")
-	if job.err != nil {
-		f.WriteString("error: " + job.err.Error() + "\n")
-	} else {
-		f.WriteString("error: nil\n")
-	}
-	f.WriteString("log:\n\n")
-	f.Write(out)
+	logF, err := os.Create(jobLogFile(ctx, job))
 
-	f.Sync()
+	if err != nil {
+		panic(err)
+	}
+	defer logF.Close()
+
+	logF.WriteString("name: " + job.name + "\n")
+	logF.WriteString("cmd: " + job.cmd + "\n")
+	logF.WriteString("level: " + strconv.Itoa(job.level) + "\n")
+	logF.WriteString("started_at: " + job.started.String() + "\n")
+	logF.WriteString("stopped_at: " + job.stopped.String() + "\n")
+	if job.err != nil {
+		logF.WriteString("error: " + job.err.Error() + "\n")
+	} else {
+		logF.WriteString("error: nil\n")
+	}
+	logF.Sync()
+
+	of, err := os.Create(jobOutputFile(ctx, job))
+
+	if err != nil {
+		panic(err)
+	}
+	defer of.Close()
+
+	of.Write(out)
+	of.Sync()
 }
 
 func decJobsRemain(jobQeue *JobQeue) {
@@ -220,7 +277,14 @@ func jobWorker(jobWorkerCh <-chan *Job, jobColCh chan<- *Job, w *Worker, ctx *Co
 
 				newJob.started = time.Now()
 
+				err := removeJobDir(ctx, newJob)
+
+				if err != nil {
+					log.Println(color.RedString("[!] Error removing job directory:"), err)
+				}
+
 				cmd := exec.Command("bash", "-c", newJob.cmd)
+				cmd.Env = append(os.Environ(), ctx.config...)
 				cmd.Dir = ctx.outDir
 				out, err := cmd.CombinedOutput()
 
@@ -433,17 +497,15 @@ func readJobFile(filePath string) []string {
 	jobs := []string{}
 
 	if _, err := os.Stat(filePath); errors.Is(err, os.ErrNotExist) {
-		user, err := user.Current()
-
-		if err != nil {
-			log.Fatalf("error getting user home: %s", err.Error())
-		}
-		homeDirectory := user.HomeDir
-
 		jobsDir := os.Getenv("GOW_JOBS_DIR")
 
 		if jobsDir == "" {
-			jobsDir = filepath.Join(homeDirectory, "gow", "jobs")
+			user, err := user.Current()
+
+			if err != nil {
+				log.Fatalf("error getting user home: %s", err.Error())
+			}
+			jobsDir = filepath.Join(user.HomeDir, "gow", "jobs")
 		}
 
 		filePath = filepath.Join(jobsDir, filePath+".gow")
@@ -475,11 +537,78 @@ func readJobFile(filePath string) []string {
 	return jobs
 }
 
+func readConfigFile(filePath string) []string {
+	config := []string{}
+
+	if filePath == "" {
+		log.Println("[ ] No custom config loaded")
+
+		return config
+	}
+	log.Println("[*] loading config: ", filePath)
+
+	if _, err := os.Stat(filePath); err != nil {
+		log.Fatal("error loading config file: ", err)
+	}
+
+	f, e := os.Open(filePath)
+
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		config = append(config, line)
+	}
+
+	e = scanner.Err()
+
+	if e != nil {
+		log.Fatal(e)
+	}
+	return config
+}
+
 func createDirs(ctx *Context) {
 	os.MkdirAll(ctx.workDir, os.ModePerm)
 	os.MkdirAll(ctx.outDir, os.ModePerm)
 	os.MkdirAll(ctx.logDir, os.ModePerm)
 	os.MkdirAll(ctx.inDir, os.ModePerm)
+}
+
+func cleanAll(ctx *Context) {
+	// Remove all subdirectories in work directory
+	entries, err := os.ReadDir(ctx.workDir)
+	if err != nil {
+		log.Println("[!] Error reading work directory:", err)
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			fullPath := filepath.Join(ctx.workDir, entry.Name())
+			err := os.RemoveAll(fullPath)
+			if err != nil {
+				log.Println("[!] Error removing directory:", fullPath, err)
+			} else {
+				log.Println("[-] Removed directory:", fullPath)
+			}
+		}
+	}
+}
+
+func clean(ctx *Context) {
+	os.RemoveAll(ctx.outDir)
+	os.RemoveAll(ctx.logDir)
+	os.RemoveAll(ctx.inDir)
+
+	log.Println("[-] Removed output directory:", ctx.outDir)
+	log.Println("[-] Removed log directory:", ctx.logDir)
+	log.Println("[-] Removed input directory:", ctx.inDir)
 }
 
 func jobsHelp() {
@@ -507,6 +636,8 @@ Job definifion:
 		${GOW_REPLAY_PROXY}
 		${GOW_WORK_DIR}
 	  	${GOW_IN_DIR}
+		${GOW_DOCKER_CMD}
+		${GOW_PODMAN_CMD}
 
 Example:
   
@@ -523,16 +654,19 @@ Example:
 
 func main() {
 	coreWorkersF := flag.Int("t", 5, "number of worker threads")
-	workDirF := flag.String("w", "", "workspace directory for outputs, logs and results default value is GOW_WORK_DIR=~/workdir/gow")
+	workDirF := flag.String("w", "", "workspace directory for outputs, logs and results default value is GOW_WORK_DIR=~/gow")
 	inputFileF := flag.String("if", "", "input file to be processed, inputs are processed line by line")
 	inputF := flag.String("i", "", "single input like url, domain, etc.")
 	outFileF := flag.String("of", "", "output directory or file if needed for job processing")
 	proxyF := flag.String("proxy", "", "network proxy like proto://host:port")
 	replayProxyF := flag.String("replay-proxy", "", "replay proxy like proto://host:port, in case of success/finding request is sent to replay proxy e.g. Burp")
 	jobsFileF := flag.String("jobs", "", "execute custom jobs file, specify file path or jobs file name without gow suffix, it will be taken from GOW_JOBS_DIR=~/gow/jobs")
+	configFileF := flag.String("config", "", "load config file, it loads all line as shel env variables")
 	forceF := flag.Bool("force", false, "force job execution regardless it was run before")
 	jobsExF := flag.Bool("jobs-help", false, "show gow jobs example")
 	cmdOptionsF := flag.String("cmd-options", "", "put addiotnal cmd option to env variable GOW_CMD_OPTIONS")
+	cleanAllF := flag.Bool("clean-all", false, "clean all job logs and results")
+	cleanF := flag.Bool("clean", false, "clean current job logs and results, based on the -i or -if flag")
 
 	flag.Parse()
 
@@ -556,14 +690,18 @@ func main() {
 		}
 		homeDirectory := user.HomeDir
 
-		*workDirF = filepath.Join(homeDirectory, "workdir", "gow")
+		*workDirF = filepath.Join(homeDirectory, "gow")
 	}
 
 	workDirAbs, _ := filepath.Abs(*workDirF)
 	inputFileAbs, _ := filepath.Abs(*inputFileF)
 	outputFileAbs, _ := filepath.Abs(*outFileF)
 
-	ctx := Context{workDir: workDirAbs, force: *forceF, inputFileSafe: fileSafeString(path.Base(inputFileAbs)), inputSafe: fileSafeString(*inputF)}
+	ctx := Context{workDir: workDirAbs, force: *forceF, inputFileSafe: fileSafeString(path.Base(inputFileAbs)), inputSafe: fileSafeString(*inputF), config: readConfigFile(*configFileF)}
+
+	if *cleanAllF {
+		cleanAll(&ctx)
+	}
 
 	if *inputF != "" {
 		ctx.outDir = filepath.Join(workDirAbs, ctx.inputSafe, "out")
@@ -576,6 +714,11 @@ func main() {
 	} else {
 		os.Exit(2)
 	}
+
+	if *cleanF {
+		clean(&ctx)
+	}
+
 	os.Setenv("GOW_WORK_DIR", ctx.workDir)
 	os.Setenv("GOW_OUT_DIR", ctx.outDir)
 	os.Setenv("GOW_IN_DIR", ctx.inDir)
@@ -588,9 +731,34 @@ func main() {
 	os.Setenv("GOW_PROXY", *proxyF)
 	os.Setenv("GOW_REPLAY_PROXY", *replayProxyF)
 	os.Setenv("GOW_CMD_OPTIONS", *cmdOptionsF)
+	os.Setenv("GOW_PODMAN_IN_DIR", "/hd/in")
+	os.Setenv("GOW_PODMAN_OUT_DIR", "/hd/out")
+	os.Setenv("GOW_PODMAN_CMD", "podman run --rm -v $(pwd):${GOW_PODMAN_OUT_DIR} -v ${GOW_IN_DIR}:${GOW_PODMAN_IN_DIR} -w ${GOW_PODMAN_OUT_DIR} --env-file ${GOW_IN_DIR}/env.txt")
+	os.Setenv("GOW_DOCKER_IN_DIR", "/hd/in")
+	os.Setenv("GOW_DOCKER_OUT_DIR", "/hd/out")
+	os.Setenv("GOW_DOCKER_CMD", "docker run --rm -v $(pwd):${GOW_DOCKER_OUT_DIR} -v ${GOW_IN_DIR}:${GOW_DOCKER_IN_DIR} -w ${GOW_DOCKER_OUT_DIR} --env-file ${GOW_IN_DIR}/env.txt")
 
 	createDirs(&ctx)
 
+	// Write all GOW_ environment variables to a file in the input directory
+	envFile := filepath.Join(ctx.inDir, "env.txt")
+	f, err := os.Create(envFile)
+	if err != nil {
+		log.Printf("Error creating environment file: %s", err.Error())
+	} else {
+		defer f.Close()
+		for _, env := range os.Environ() {
+			if strings.HasPrefix(env, "GOW_") {
+				f.WriteString(env + "\n")
+			}
+		}
+	}
+
+	if *jobsFileF == "" {
+		log.Println("[-] No jobs file specified")
+
+		return
+	}
 	jobsStr := readJobFile(*jobsFileF)
 
 	var wg sync.WaitGroup
@@ -632,7 +800,7 @@ func main() {
 		go jobCollector(jobColCh, jobSchedCh, &c, &sc, &jobQeue)
 	}
 
-	initJob := Job{name: "init", cmd: "date; env | grep GOW_", childs: []*Job{}, state: JOB_NOT_STARTED, force: false}
+	initJob := Job{name: "00_init", cmd: "date; env | grep GOW_", childs: []*Job{}, state: JOB_NOT_STARTED, force: false}
 	initJob.uniqID = jobUniqID(&initJob)
 
 	index := 0
